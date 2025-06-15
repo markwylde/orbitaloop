@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Orbitaloop</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/p5.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #000;
+            overflow: hidden;
+            font-family: 'Courier New', monospace;
+            cursor: none;
+        }
+        
+        .ui {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            color: #00ffff;
+            font-size: 18px;
+            z-index: 1000;
+            text-shadow: 0 0 10px #00ffff;
+        }
+        
+
+        
+        .game-over {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #ff0080;
+            font-size: 32px;
+            text-align: center;
+            text-shadow: 0 0 20px #ff0080;
+            display: none;
+        }
+        
+        .instructions {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #00ffff;
+            text-align: center;
+            font-size: 20px;
+            text-shadow: 0 0 10px #00ffff;
+        }
+    </style>
+</head>
+<body>
+    <div class="ui">
+        <div>Score: <span id="score">0</span></div>
+        <div>Combo: x<span id="combo">1</span></div>
+        <div>Level: <span id="level">1</span></div>
+    </div>
+    
+
+    
+    <div class="game-over" id="gameOver">
+        <div>GAME OVER</div>
+        <div style="font-size: 18px; margin-top: 20px;">Final Score: <span id="finalScore">0</span></div>
+        <div style="font-size: 16px; margin-top: 10px;">Press R to Restart</div>
+    </div>
+    
+    <div class="instructions" id="instructions">
+        <div style="font-size: 24px; margin-bottom: 20px;">ORBITALOOP</div>
+        <div>Move mouse to fly and draw trails</div>
+        <div>Complete loops to destroy asteroids inside</div>
+        <div>Collect power-ups for special abilities</div>
+        <div style="margin-top: 20px; font-size: 16px;">Press any key to start</div>
+    </div>
+
+    <script>
+        let spaceship, asteroids = [], trail = [], powerups = [];
+        let score = 0, combo = 1, level = 1;
+        let maxTrailLength = 150, currentTrailLength = 0;
+        let gameStarted = false, gameOver = false;
+        let stars = [];
+        let particles = [];
+        let asteroidSpawnRate = 0.02;
+        let powerupEffects = {};
+        
+        // Sound effects using Web Audio API
+        let audioContext;
+        let sounds = {};
+        
+        function initAudio() {
+            try {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            } catch(e) {
+                console.log('Audio not supported');
+            }
+        }
+        
+        function playSound(frequency, duration, type = 'sine') {
+            if (!audioContext) return;
+            
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+            
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+            
+            oscillator.frequency.setValueAtTime(frequency, audioContext.currentTime);
+            oscillator.type = type;
+            
+            gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + duration);
+            
+            oscillator.start(audioContext.currentTime);
+            oscillator.stop(audioContext.currentTime + duration);
+        }
+        
+        function setup() {
+            createCanvas(windowWidth, windowHeight);
+            initAudio();
+            
+            // Create stars
+            for (let i = 0; i < 200; i++) {
+                stars.push({
+                    x: random(width),
+                    y: random(height),
+                    size: random(1, 3),
+                    brightness: random(0.3, 1)
+                });
+            }
+            
+            spaceship = {
+                x: width / 2,
+                y: height / 2,
+                size: 20,
+                angle: 0
+            };
+            
+            resetGame();
+        }
+        
+        function resetGame() {
+            asteroids = [];
+            trail = [];
+            powerups = [];
+            particles = [];
+            score = 0;
+            combo = 1;
+            level = 1;
+            maxTrailLength = 150;
+            currentTrailLength = 0;
+            gameOver = false;
+            asteroidSpawnRate = 0.02;
+            powerupEffects = {};
+            
+            // Spawn initial asteroids
+            for (let i = 0; i < 5; i++) {
+                spawnAsteroid();
+            }
+            
+            updateUI();
+        }
+        
+        function draw() {
+            background(5, 5, 15);
+            
+            // Draw stars
+            noStroke();
+            for (let star of stars) {
+                fill(255, 255, 255, star.brightness * 255);
+                ellipse(star.x, star.y, star.size);
+            }
+            
+            if (!gameStarted) {
+                return;
+            }
+            
+            if (gameOver) {
+                return;
+            }
+            
+            // Update spaceship position
+            spaceship.x = mouseX;
+            spaceship.y = mouseY;
+            spaceship.angle = atan2(mouseY - pmouseY, mouseX - pmouseX);
+            
+            // Always add to trail when moving
+            if (dist(mouseX, mouseY, pmouseX, pmouseY) > 3) {
+                trail.push({ 
+                    x: mouseX, 
+                    y: mouseY, 
+                    life: 255,
+                    age: 0
+                });
+                
+                // Keep trail at max length by removing oldest points
+                while (trail.length > maxTrailLength) {
+                    trail.shift();
+                }
+            }
+            
+            // Update and draw trail
+            for (let i = trail.length - 1; i >= 0; i--) {
+                let t = trail[i];
+                t.age++;
+                
+                // Calculate fade based on position in trail (newer = brighter)
+                let fadeAmount = map(i, 0, trail.length - 1, 50, 255);
+                t.life = fadeAmount;
+                
+                if (t.life <= 0) {
+                    trail.splice(i, 1);
+                } else {
+                    // Create gradient effect along trail
+                    let alpha = t.life;
+                    stroke(0, 255, 255, alpha);
+                    strokeWeight(map(alpha, 50, 255, 1, 5));
+                    
+                    if (i > 0) {
+                        line(t.x, t.y, trail[i-1].x, trail[i-1].y);
+                    }
+                }
+            }
+            
+            // Check for complete loops
+            if (trail.length > 20) {
+                checkForLoop();
+            }
+            
+            // Update and draw asteroids
+            for (let i = asteroids.length - 1; i >= 0; i--) {
+                let asteroid = asteroids[i];
+                
+                // Move asteroid
+                asteroid.x += asteroid.vx;
+                asteroid.y += asteroid.vy;
+                asteroid.rotation += asteroid.rotSpeed;
+                
+                // Wrap around screen
+                if (asteroid.x < -asteroid.size) asteroid.x = width + asteroid.size;
+                if (asteroid.x > width + asteroid.size) asteroid.x = -asteroid.size;
+                if (asteroid.y < -asteroid.size) asteroid.y = height + asteroid.size;
+                if (asteroid.y > height + asteroid.size) asteroid.y = -asteroid.size;
+                
+                // Draw asteroid
+                push();
+                translate(asteroid.x, asteroid.y);
+                rotate(asteroid.rotation);
+                stroke(150, 150, 150);
+                strokeWeight(2);
+                fill(60, 60, 80);
+                
+                beginShape();
+                for (let j = 0; j < asteroid.vertices.length; j++) {
+                    let v = asteroid.vertices[j];
+                    vertex(v.x, v.y);
+                }
+                endShape(CLOSE);
+                pop();
+                
+                // Check collision with spaceship
+                if (dist(asteroid.x, asteroid.y, spaceship.x, spaceship.y) < asteroid.size + spaceship.size/2) {
+                    if (!powerupEffects.shield) {
+                        gameOver = true;
+                        document.getElementById('gameOver').style.display = 'block';
+                        document.getElementById('finalScore').textContent = score;
+                        playSound(150, 1, 'sawtooth');
+                        return;
+                    } else {
+                        // Use shield
+                        powerupEffects.shield = false;
+                        asteroids.splice(i, 1);
+                        playSound(400, 0.3);
+                        continue;
+                    }
+                }
+            }
+            
+            // Update and draw powerups
+            for (let i = powerups.length - 1; i >= 0; i--) {
+                let powerup = powerups[i];
+                
+                powerup.x += powerup.vx;
+                powerup.y += powerup.vy;
+                powerup.rotation += 0.1;
+                
+                // Remove if off screen
+                if (powerup.x < -50 || powerup.x > width + 50 || powerup.y < -50 || powerup.y > height + 50) {
+                    powerups.splice(i, 1);
+                    continue;
+                }
+                
+                // Draw powerup
+                push();
+                translate(powerup.x, powerup.y);
+                rotate(powerup.rotation);
+                
+                switch(powerup.type) {
+                    case 'trail':
+                        stroke(0, 255, 0);
+                        fill(0, 255, 0, 100);
+                        break;
+                    case 'speed':
+                        stroke(255, 255, 0);
+                        fill(255, 255, 0, 100);
+                        break;
+                    case 'shield':
+                        stroke(0, 0, 255);
+                        fill(0, 0, 255, 100);
+                        break;
+                    case 'multiplier':
+                        stroke(255, 0, 255);
+                        fill(255, 0, 255, 100);
+                        break;
+                }
+                
+                strokeWeight(3);
+                rect(-10, -10, 20, 20);
+                pop();
+                
+                // Check collection
+                if (dist(powerup.x, powerup.y, spaceship.x, spaceship.y) < 25) {
+                    collectPowerup(powerup);
+                    powerups.splice(i, 1);
+                }
+            }
+            
+            // Update particles
+            for (let i = particles.length - 1; i >= 0; i--) {
+                let p = particles[i];
+                p.x += p.vx;
+                p.y += p.vy;
+                p.life -= 5;
+                p.vx *= 0.98;
+                p.vy *= 0.98;
+                
+                if (p.life <= 0) {
+                    particles.splice(i, 1);
+                } else {
+                    stroke(p.r, p.g, p.b, p.life);
+                    strokeWeight(2);
+                    point(p.x, p.y);
+                }
+            }
+            
+            // Draw spaceship
+            push();
+            translate(spaceship.x, spaceship.y);
+            rotate(spaceship.angle);
+            
+            // Ship body
+            stroke(0, 255, 255);
+            strokeWeight(2);
+            fill(0, 150, 255, 100);
+            triangle(-10, -5, -10, 5, 15, 0);
+            
+            // Engine glow (always on since always trailing)
+            stroke(255, 100, 0);
+            strokeWeight(3);
+            line(-10, 0, -15, 0);
+            
+            // Shield effect
+            if (powerupEffects.shield) {
+                noFill();
+                stroke(0, 0, 255, 150);
+                strokeWeight(3);
+                ellipse(0, 0, 30);
+            }
+            
+            pop();
+            
+            // Spawn asteroids
+            if (random() < asteroidSpawnRate * (0.5 + level * 0.1)) {
+                spawnAsteroid();
+            }
+            
+            // Spawn powerups occasionally
+            if (random() < 0.001) {
+                spawnPowerup();
+            }
+            
+            // Update level
+            let newLevel = floor(score / 500) + 1;
+            if (newLevel > level) {
+                level = newLevel;
+                asteroidSpawnRate += 0.005;
+                playSound(600, 0.5);
+            }
+            
+            // Update power-up effects
+            updatePowerupEffects();
+            
+            updateUI();
+        }
+        
+        function spawnAsteroid() {
+            let side = floor(random(4));
+            let x, y, vx, vy;
+            
+            switch(side) {
+                case 0: // Top
+                    x = random(width);
+                    y = -50;
+                    vx = random(-1, 1);
+                    vy = random(0.5, 2);
+                    break;
+                case 1: // Right
+                    x = width + 50;
+                    y = random(height);
+                    vx = random(-2, -0.5);
+                    vy = random(-1, 1);
+                    break;
+                case 2: // Bottom
+                    x = random(width);
+                    y = height + 50;
+                    vx = random(-1, 1);
+                    vy = random(-2, -0.5);
+                    break;
+                case 3: // Left
+                    x = -50;
+                    y = random(height);
+                    vx = random(0.5, 2);
+                    vy = random(-1, 1);
+                    break;
+            }
+            
+            let size = random(15, 40);
+            let asteroid = {
+                x: x,
+                y: y,
+                vx: vx,
+                vy: vy,
+                size: size,
+                rotation: 0,
+                rotSpeed: random(-0.05, 0.05),
+                vertices: []
+            };
+            
+            // Generate irregular shape
+            let numVertices = floor(random(6, 10));
+            for (let i = 0; i < numVertices; i++) {
+                let angle = (i / numVertices) * TWO_PI;
+                let radius = size * random(0.7, 1.3);
+                asteroid.vertices.push({
+                    x: cos(angle) * radius,
+                    y: sin(angle) * radius
+                });
+            }
+            
+            asteroids.push(asteroid);
+        }
+        
+        function spawnPowerup() {
+            let types = ['trail', 'speed', 'shield', 'multiplier'];
+            let type = random(types);
+            
+            powerups.push({
+                x: random(100, width - 100),
+                y: random(100, height - 100),
+                vx: random(-0.5, 0.5),
+                vy: random(-0.5, 0.5),
+                type: type,
+                rotation: 0
+            });
+        }
+        
+        function collectPowerup(powerup) {
+            playSound(800, 0.3);
+            
+            switch(powerup.type) {
+                case 'trail':
+                    maxTrailLength += 50;
+                    break;
+                case 'speed':
+                    powerupEffects.speedBoost = frameCount + 600; // 10 seconds at 60fps
+                    break;
+                case 'shield':
+                    powerupEffects.shield = true;
+                    break;
+                case 'multiplier':
+                    powerupEffects.multiplier = frameCount + 900; // 15 seconds
+                    break;
+            }
+        }
+        
+        function updatePowerupEffects() {
+            // Speed boost (affects trail length temporarily)
+            if (powerupEffects.speedBoost && frameCount > powerupEffects.speedBoost) {
+                delete powerupEffects.speedBoost;
+            }
+            
+            // Multiplier
+            if (powerupEffects.multiplier && frameCount > powerupEffects.multiplier) {
+                delete powerupEffects.multiplier;
+            }
+        }
+        
+        function checkForLoop() {
+            if (trail.length < 20) return;
+            
+            // Check if current position is close to any previous position (forming a loop)
+            let currentPos = trail[trail.length - 1];
+            let loopStartIndex = -1;
+            
+            // Look for intersection with earlier parts of the trail
+            for (let i = 0; i < trail.length - 10; i++) {
+                if (dist(currentPos.x, currentPos.y, trail[i].x, trail[i].y) < 25) {
+                    loopStartIndex = i;
+                    break;
+                }
+            }
+            
+            if (loopStartIndex >= 0) {
+                // Extract the loop portion
+                let loopTrail = trail.slice(loopStartIndex);
+                
+                // Verify we have a substantial loop
+                if (loopTrail.length > 15) {
+                    // Check which asteroids are inside this loop
+                    let destroyedCount = 0;
+                    
+                    for (let i = asteroids.length - 1; i >= 0; i--) {
+                        if (pointInPolygon(asteroids[i].x, asteroids[i].y, loopTrail)) {
+                            let asteroid = asteroids[i];
+                            
+                            // Add explosion particles
+                            for (let j = 0; j < 15; j++) {
+                                particles.push({
+                                    x: asteroid.x,
+                                    y: asteroid.y,
+                                    vx: random(-5, 5),
+                                    vy: random(-5, 5),
+                                    life: 255,
+                                    r: random(200, 255),
+                                    g: random(100, 200),
+                                    b: random(0, 100)
+                                });
+                            }
+                            
+                            // Calculate score based on asteroid size
+                            let points = floor(asteroid.size);
+                            if (powerupEffects.multiplier) points *= 2;
+                            score += points * combo;
+                            
+                            destroyedCount++;
+                            asteroids.splice(i, 1);
+                            
+                            // Chance to spawn powerup
+                            if (random() < 0.3) {
+                                spawnPowerup();
+                            }
+                        }
+                    }
+                    
+                    if (destroyedCount > 0) {
+                        combo = min(combo + destroyedCount, 10);
+                        playSound(300 + destroyedCount * 50, 0.5);
+                        
+                        // Visual feedback for successful loop
+                        for (let j = 0; j < 20; j++) {
+                            particles.push({
+                                x: currentPos.x,
+                                y: currentPos.y,
+                                vx: random(-3, 3),
+                                vy: random(-3, 3),
+                                life: 150,
+                                r: 0,
+                                g: 255,
+                                b: 255
+                            });
+                        }
+                    } else {
+                        combo = 1;
+                    }
+                    
+                    // Remove the completed loop from trail
+                    trail = trail.slice(0, loopStartIndex);
+                }
+            }
+        }
+        
+        function pointInPolygon(x, y, polygon) {
+            let inside = false;
+            
+            for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+                if (((polygon[i].y > y) !== (polygon[j].y > y)) &&
+                    (x < (polygon[j].x - polygon[i].x) * (y - polygon[i].y) / (polygon[j].y - polygon[i].y) + polygon[i].x)) {
+                    inside = !inside;
+                }
+            }
+            
+            return inside;
+        }
+        
+        function updateUI() {
+            document.getElementById('score').textContent = score;
+            document.getElementById('combo').textContent = combo;
+            document.getElementById('level').textContent = level;
+        }
+        
+        function keyPressed() {
+            if (!gameStarted) {
+                gameStarted = true;
+                document.getElementById('instructions').style.display = 'none';
+            }
+            
+            if (key === 'r' || key === 'R') {
+                if (gameOver) {
+                    gameStarted = true;
+                    document.getElementById('gameOver').style.display = 'none';
+                    resetGame();
+                }
+            }
+        }
+        
+        function windowResized() {
+            resizeCanvas(windowWidth, windowHeight);
+        }
+    </script>
+</body>
+</html>
