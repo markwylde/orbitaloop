@@ -5,8 +5,7 @@
   "main": "index.js",
   "scripts": {
     "dev": "ws --port 8000 --open",
-    "start": "ws --port 8000",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "ws --port 8000"
   },
   "keywords": [],
   "author": "",
